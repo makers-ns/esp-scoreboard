@@ -19,7 +19,6 @@
 
 #define PRINT_CALLBACK  0
 #define DEBUG 0
-#define LED_HEARTBEAT 0
 
 #if DEBUG
 #define PRINT(s, v) { Serial.print(F(s)); Serial.print(v); }
@@ -29,26 +28,16 @@
 #define PRINTS(s)
 #endif
 
-
-#if LED_HEARTBEAT
-#define HB_LED  D2
-#define HB_LED_TIME 500 // in milliseconds
-#endif
-
 // Define the number of devices we have in the chain and the hardware interface
 // NOTE: These pin numbers will probably not work with your hardware and may
 // need to be adapted
 #define HARDWARE_TYPE MD_MAX72XX::ICSTATION_HW
-#define MAX_DEVICES 8
+#define MAX_DEVICES 4
 
-#define CLK_PIN   D5 // or SCK
-#define DATA_PIN  D7 // or MOSI
 #define CS_PIN    D8 // or SS
 
 // SPI hardware interface
 MD_MAX72XX mx = MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
-// Arbitrary pins
-//MD_MAX72XX mx = MD_MAX72XX(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
 
 // WiFi Server object and parameters
 WiFiServer server(80);
@@ -62,22 +51,27 @@ char curMessage[MESG_SIZE];
 char newMessage[MESG_SIZE];
 bool newMessageAvailable = false;
 
+static enum { S_IP, S_REFRESH, S_IDLE} runtimeState = S_IP;
+
+int left = 0;
+int right = 0;
+
 const char WebResponse[] = "HTTP/1.1 200 OK\nContent-Type: text/html\n\n";
 
 const char WebPage[] =
 "<!DOCTYPE html>" \
 "<html>" \
 "<head>" \
-"<title>MajicDesigns Test Page</title>" \
+"<title>esp-scoreboard</title>" \
 
 "<script>" \
 "strLine = \"\";" \
 
-"function SendText()" \
+"function SendText(action)" \
 "{" \
 "  nocache = \"/&nocache=\" + Math.random() * 1000000;" \
 "  var request = new XMLHttpRequest();" \
-"  strLine = \"&MSG=\" + document.getElementById(\"txt_form\").Message.value;" \
+"  strLine = \"&action=\" + action;" \
 "  request.open(\"GET\", strLine + nocache, false);" \
 "  request.send(null);" \
 "}" \
@@ -85,13 +79,12 @@ const char WebPage[] =
 "</head>" \
 
 "<body>" \
-"<p><b>MD_MAX72xx set message</b></p>" \
+"<p><b>Score</b></p>" \
 
-"<form id=\"txt_form\" name=\"frmText\">" \
-"<label>Msg:<input type=\"text\" name=\"Message\" maxlength=\"255\"></label><br><br>" \
-"</form>" \
 "<br>" \
-"<input type=\"submit\" value=\"Send Text\" onclick=\"SendText()\">" \
+"<input type=\"submit\" value=\"Left\" onclick=\"SendText(1)\">" \
+"<input type=\"submit\" value=\"Reset\" onclick=\"SendText(2)\">" \
+"<input type=\"submit\" value=\"Right\" onclick=\"SendText(3)\">" \
 "</body>" \
 "</html>";
 
@@ -116,33 +109,80 @@ uint8_t htoi(char c)
   return(0);
 }
 
-boolean getText(char *szMesg, char *psz, uint8_t len)
+void leftScores()
+{
+  left++;
+}
+
+void rightScores()
+{
+  right++;
+}
+
+void resetScore()
+{
+  left = 0;
+  right = 0;
+}
+
+void print_score(int pl1, int pl2)
+{
+  PRINTS("\nPrinting scode here");
+  mx.clear();
+  mx.control(MD_MAX72XX::WRAPAROUND, MD_MAX72XX::OFF);
+
+  int pl1digits = pl1 % 10;
+  int pl1tens = (pl1 / 10) % 10;
+  int pl2digits = pl2 % 10;
+  int pl2tens = (pl2 / 10) % 10;
+
+  // draw something that will show changes
+  if(pl1tens > 0)
+    mx.setChar(mx.getColumnCount()-1, '0'+pl1tens);
+  mx.setChar(mx.getColumnCount()-7, '0'+pl1digits);
+
+  mx.setChar(mx.getColumnCount()/2 + 1, '-');
+
+  if(pl2tens > 0)
+    mx.setChar(4+6, '0'+pl2tens);
+  mx.setChar(4, '0'+pl2digits);
+}
+
+void updateScore(char* option)
+{
+  int i = atoi(option);
+  switch(i)
+  {
+    case 1:
+      leftScores();
+      break;
+    case 2:
+      resetScore();
+      break;
+    case 3:
+      rightScores();
+      break;
+  }
+  runtimeState = S_REFRESH;
+}
+
+boolean getOption(char *szMesg, char *psz, uint8_t len)
 {
   boolean isValid = false;  // text received flag
   char *pStart, *pEnd;      // pointer to start and end of text
 
   // get pointer to the beginning of the text
-  pStart = strstr(szMesg, "/&MSG=");
+  pStart = strstr(szMesg, "/&action=");
 
   if (pStart != NULL)
   {
-    pStart += 6;  // skip to start of data
+    pStart += 9;  // skip to start of data
     pEnd = strstr(pStart, "/&");
 
     if (pEnd != NULL)
     {
       while (pStart != pEnd)
       {
-        if ((*pStart == '%') && isdigit(*(pStart+1)))
-        {
-          // replace %xx hex code with the ASCII character
-          char c = 0;
-          pStart++;
-          c += (htoi(*pStart++) << 4);
-          c += htoi(*pStart++);
-          *psz++ = c;
-        }
-        else
           *psz++ = *pStart++;
       }
 
@@ -213,8 +253,12 @@ void handleWiFi(void)
   case S_EXTRACT: // extract data
     PRINTS("\nS_EXTRACT");
     // Extract the string from the message if there is one
-    newMessageAvailable = getText(szBuf, newMessage, MESG_SIZE);
-    PRINT("\nNew Msg: ", newMessage);
+    newMessageAvailable = getOption(szBuf, newMessage, MESG_SIZE);
+    if(newMessageAvailable)
+    {
+      updateScore(newMessage);
+      PRINT("\nNew Msg: ", newMessage);
+    }
     state = S_RESPONSE;
     break;
 
@@ -233,7 +277,8 @@ void handleWiFi(void)
     state = S_IDLE;
     break;
 
-  default:  state = S_IDLE;
+  default:  
+    state = S_IDLE;
   }
 }
 
@@ -312,15 +357,25 @@ uint8_t scrollDataSource(uint8_t dev, MD_MAX72XX::transformType_t t)
   return(colData);
 }
 
-void scrollText(void)
+void refreshDisplay(void)
 {
   static uint32_t	prevTime = 0;
 
-  // Is it time to scroll the text?
-  if (millis() - prevTime >= SCROLL_DELAY)
+  switch (runtimeState)
   {
-    mx.transform(MD_MAX72XX::TSL);  // scroll along - the callback will load all the data
-    prevTime = millis();      // starting point for next time
+  case S_REFRESH:
+    print_score(left, right);
+    runtimeState = S_IDLE;
+    break;
+  case S_IP:
+    // Is it time to scroll the text?
+    if (millis() - prevTime >= SCROLL_DELAY)
+    {
+      mx.transform(MD_MAX72XX::TSL);  // scroll along - the callback will load all the data
+      prevTime = millis();      // starting point for next time
+    }
+  default:
+    break;
   }
 }
 
@@ -329,11 +384,6 @@ void setup()
 #if DEBUG
   Serial.begin(115200);
   PRINTS("\n[MD_MAX72XX WiFi Message Display]\nType a message for the scrolling display from your internet browser");
-#endif
-
-#if LED_HEARTBEAT
-  pinMode(HB_LED, OUTPUT);
-  digitalWrite(HB_LED, LOW);
 #endif
 
   // Display initialization
@@ -366,16 +416,6 @@ void setup()
 
 void loop()
 {
-#if LED_HEARTBEAT
-  static uint32_t timeLast = 0;
-
-  if (millis() - timeLast >= HB_LED_TIME)
-  {
-    digitalWrite(HB_LED, digitalRead(HB_LED) == LOW ? HIGH : LOW);
-    timeLast = millis();
-  }
-#endif
-
   handleWiFi();
-  scrollText();
+  refreshDisplay();
 }
