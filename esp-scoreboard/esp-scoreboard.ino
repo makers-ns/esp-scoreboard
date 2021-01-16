@@ -9,10 +9,12 @@
 //
 
 #include <ESP8266WiFi.h>
+#include <ESP8266mDNS.h>
 #include <MD_MAX72xx.h>
 #include <SPI.h>
+#include <ButtonDebounce.h>
 
-// If you don't have wifi_parameters.h make sure to crete one.
+// If you don't have ../wifi_parameters.h make sure to crete one.
 // const char* ssid = "SSID";
 // const char* password = "WIFIpassword";
 #include "wifi_parameters.h"
@@ -27,6 +29,8 @@
 #define PRINT(s, v)
 #define PRINTS(s)
 #endif
+
+const char host[] = "scoreboard.local";
 
 // Define the number of devices we have in the chain and the hardware interface
 // NOTE: These pin numbers will probably not work with your hardware and may
@@ -55,6 +59,10 @@ static enum { S_IP, S_REFRESH, S_IDLE} runtimeState = S_IP;
 
 int left = 0;
 int right = 0;
+
+ButtonDebounce button1(D0, 250);
+ButtonDebounce button2(D3, 250);
+ButtonDebounce button3(D4, 250);
 
 const char WebResponse[] = "HTTP/1.1 200 OK\nContent-Type: text/html\n\n";
 
@@ -123,6 +131,30 @@ void resetScore()
 {
   left = 0;
   right = 0;
+}
+
+void buttonChanged1(int state){
+  if(state == 1)
+  {
+    leftScores();
+    runtimeState = S_REFRESH;
+  }
+}
+
+void buttonChanged2(int state){
+  if(state == 0)
+  {
+    resetScore();
+    runtimeState = S_REFRESH;
+  }
+}
+
+void buttonChanged3(int state){
+  if(state == 1)
+  {
+    rightScores();
+    runtimeState = S_REFRESH;
+  }
 }
 
 void print_score(int pl1, int pl2)
@@ -396,26 +428,45 @@ void setup()
   // Connect to and initialize WiFi network
   PRINT("\nConnecting to ", ssid);
 
-  WiFi.begin(ssid, password);
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(ssid, password);
 
+  /*
   while (WiFi.status() != WL_CONNECTED)
   {
     PRINT("\n", err2Str(WiFi.status()));
     delay(500);
   }
   PRINTS("\nWiFi connected");
+  */
 
   // Start the server
   server.begin();
   PRINTS("\nServer started");
+  MDNS.begin(host);
+  Serial.print("Open http://");
+  Serial.print(host);
+  Serial.println(" to see conroler");
+  
+  server.begin();
+  // Add service to MDNS
+  MDNS.addService("http", "tcp", 80);
+  Serial.println("HTTP server started");
 
   // Set up first message as the IP address
   sprintf(curMessage, "%03d:%03d:%03d:%03d", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3]);
   PRINT("\nAssigned IP ", curMessage);
+
+  button1.setCallback(buttonChanged1);
+  button2.setCallback(buttonChanged2);
+  button3.setCallback(buttonChanged3);
 }
 
 void loop()
 {
   handleWiFi();
   refreshDisplay();
+  button1.update();
+  button2.update();
+  button3.update();
 }
