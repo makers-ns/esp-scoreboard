@@ -60,9 +60,9 @@ static enum { S_IP, S_REFRESH, S_IDLE} runtimeState = S_IP;
 int left = 0;
 int right = 0;
 
-ButtonDebounce button1(D0, 250);
-ButtonDebounce button2(D3, 250);
-ButtonDebounce button3(D4, 250);
+ButtonDebounce button1(D0, 150);
+ButtonDebounce button2(D1, 150);
+ButtonDebounce button3(D2, 150);
 
 const char WebResponse[] = "HTTP/1.1 200 OK\nContent-Type: text/html\n\n";
 
